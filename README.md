@@ -31,7 +31,8 @@ applies to HYPER unchanged. HYPER adds:
   curves and selection, electric green `#39FF14` for the playhead, cursor and sounding steps.
 - **Neon track colours**: DRUMS yellow, SUB green, BASS lime `#B6FF00`, CHORDS cyan, LEAD magenta, ARP orange,
   TEXTURE violet, FLEX white.
-- A **full-screen boot screen**, showing the installed version.
+- A **full-screen boot screen**, showing the installed version. On the FM-1, the art is stored at 80 × 80 and
+  drawn 3× (a chunkier pixel look) so the app fits its 581,564-byte slot (see "Fitting the FM-1" below).
 
 ### Hyperpop tools: hold FX, then press a white key
 
@@ -119,9 +120,17 @@ On a computer, through the firmware's C sources (`HOST_ONLY=1 tests/run_tests.sh
 - FM Stud1o's own suite: no test that passed before HYPER fails now. Some of FM Stud1o's own tests were already
   failing before HYPER's changes; they're listed in the build log.
 
-**Not yet checked:** the build on the real compiler (GitHub Actions does that), the app's size against its 581,564-byte
-slot (if the full boot art doesn't fit, the build automatically uses a half-resolution version), and anything on a
-real FM-1: sound, CPU load, knobs and keys.
+**Built on the real compiler** (GitHub Actions, JieLi's toolchain): `hyper-0.1.fwsc`, 610,090 bytes, identity
+FM-1_901; the app 579,152 of 581,564 bytes. HYPER's tests pass there too.
+
+**Not yet checked:** anything on a real FM-1: sound, CPU load, knobs and keys.
+
+### Fitting the FM-1
+FM Stud1o fills nearly all of the FM-1's app memory, and HYPER's additions were 18,876 bytes too many. The build
+(`tools/build.py`) shrinks step by step until it fits, and says which step in its log. v0.1 needed every step:
+- the boot art stored at 80 × 80 and drawn 3× (16.5 KB → 2.7 KB),
+- the USB serial console left out (a developer's tool: the USB MIDI, USB audio and the editor are unaffected),
+- the parameter icons on the knob cards left out (the knob names and values stay).
 
 ## Where each spec item lives
 - **Drums**: per-step velocity / accent (SEQ → DETAIL), chance and FILL conditions, ratchets x1–x4, swing (GLO),

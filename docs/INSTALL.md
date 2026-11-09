@@ -34,9 +34,11 @@ The FM-1's compiler (JieLi's toolchain) only downloads onto Linux machines, so G
    - **Artifacts → HYPER-0.1-tests**: the test log and the factory song as a WAV.
    - The Pages link, `https://YOUR-NAME.github.io/HYPER/`, which is the install page.
 
-If the build log says `note the app (...) is over its slot ... built again with it at 120 x 120`, the boot art was
-too big to fit next to the code, so the firmware draws it at half resolution, doubled (it looks more pixelated).
-Everything else is the same.
+The build log's `ok    HYPER fits with ...` line says what was shrunk to fit the FM-1's app memory. For v0.1: the boot
+art at 80 × 80 drawn 3×, no USB serial console (a developer's tool), no knob-card icons.
+
+If the **pages** job fails with "Not Found", Pages isn't on yet: set **Settings → Pages → Source: GitHub Actions**,
+then re-run the workflow. The firmware file is on the run's page either way.
 
 ## 2. Install
 
