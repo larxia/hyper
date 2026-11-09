@@ -110,6 +110,7 @@ def use_docker():
     return os.environ.get("JIELI_DOCKER", "0" if native else "1") == "1"
 
 
+TC_LAST_ERR = ""
 def tc(tool, *args):
     """run a toolchain binary (pi32v2/bin/..., common/bin/...) with cwd SRC; paths relative to SRC"""
     rel = [str(Path(a).resolve().relative_to(SRC)) if isinstance(a, Path) else a for a in args]
@@ -122,6 +123,8 @@ def tc(tool, *args):
         cmd = [str(toolchain() / tool), *rel]
     r = subprocess.run(cmd, cwd=SRC, capture_output=True, text=True)
     if r.returncode:
+        global TC_LAST_ERR
+        TC_LAST_ERR = r.stdout + r.stderr          # (HYPER: main() reads an XIP overflow from it)
         sys.stderr.write(r.stdout + r.stderr)
         raise SystemExit(f"build: {tool} failed")
     if r.stderr.strip():
@@ -445,15 +448,32 @@ def main():
         gen, ldr = ex.submit(generate), ex.submit(build_loader)
         gen.result()
         ota = ldr.result()
-    img, syms, dis, rt = build_app()
-    if len(img) > APP_SLOT and os.environ.get("HYPER_SPLASH_ZOOM") != "2":   # HYPER: the boot art at half size, drawn
-        print(f"  note  the app ({len(img)} B) is over its slot ({APP_SLOT} B) with the boot art whole: "
-              "built again with it at 120 x 120, drawn twice the size (HYPER_SPLASH_ZOOM=2)")
-        os.environ["HYPER_SPLASH_ZOOM"] = "2"
-        subprocess.run([sys.executable, str(SRC / "tools" / "gen_splash_image.py"), str(GEN / "ui_splash.h")], check=True)
-        img, syms, dis, rt = build_app()
-    print(f"  ok    boot art: {'120 x 120 drawn x2' if os.environ.get('HYPER_SPLASH_ZOOM') == '2' else '240 x 240'}; "
-          f"app {len(img)} B of {APP_SLOT} B ({APP_SLOT - len(img)} B free)")
+    # HYPER: when the app does not fit (the linker's XIP region overflows, or the image is over its slot), built again
+    # smaller, step by step: the boot art at 1/2 size drawn x2; the USB serial console (a developer's) left out; the
+    # art at 1/3 drawn x3; the knob cards' parameter icons left out. Each step said, the one kept said at the end
+    STEPS = [("the boot art whole (240 x 240)", {}),
+             ("the boot art 120 x 120 drawn x2", {"HYPER_SPLASH_ZOOM": "2"}),
+             ("the boot art 120 x 120 drawn x2, no USB serial console", {"HYPER_SPLASH_ZOOM": "2", "FELUCCA_CDC": "0"}),
+             ("the boot art 80 x 80 drawn x3, no USB serial console", {"HYPER_SPLASH_ZOOM": "3", "FELUCCA_CDC": "0"}),
+             ("the boot art 80 x 80 drawn x3, no USB serial console, no knob icons",
+              {"HYPER_SPLASH_ZOOM": "3", "FELUCCA_CDC": "0", "FELUCCA_ICONS": "0"})]
+    for k, (what, env) in enumerate(STEPS):
+        os.environ.update(env)
+        if env.get("HYPER_SPLASH_ZOOM"):
+            subprocess.run([sys.executable, str(SRC / "tools" / "gen_splash_image.py"), str(GEN / "ui_splash.h")],
+                           check=True)
+        try:
+            img, syms, dis, rt = build_app()
+        except SystemExit:
+            if "overflowed" not in TC_LAST_ERR or k == len(STEPS) - 1:
+                raise
+            print(f"  note  {what}: the app does not fit ({TC_LAST_ERR.strip().splitlines()[-1].strip()}); smaller")
+            continue
+        if len(img) > APP_SLOT and k < len(STEPS) - 1:
+            print(f"  note  {what}: the app ({len(img)} B) is over its slot ({APP_SLOT} B); smaller")
+            continue
+        break
+    print(f"  ok    HYPER fits with {what}: app {len(img)} B of {APP_SLOT} B ({APP_SLOT - len(img)} B free)")
     errors, notes = check(img, syms, dis, rt)
     hal_err = mmio_check()
     errors += hal_err

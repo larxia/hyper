@@ -16,7 +16,7 @@ from pathlib import Path
 import os
 # HYPER: the boot art fills the screen (FM Stud1o: a 144 px fruit over the name). HYPER_SPLASH_ZOOM=2 (tools/build.py,
 # when the app would not fit its slot with the art whole): stored at 120 x 120, drawn twice the size (SPLASH_ZOOM)
-SPLASH_ZOOM = 2 if os.environ.get("HYPER_SPLASH_ZOOM") == "2" else 1
+SPLASH_ZOOM = {"2": 2, "3": 3}.get(os.environ.get("HYPER_SPLASH_ZOOM", ""), 1)
 SPLASH_SIZE = 240 // SPLASH_ZOOM
 KEEP = [(245, 245, 245), (150, 255, 20)]   # HYPER: the highlights and the lime rim (small areas MEDIANCUT drops)
 EDGE_BG = (8, 10, 11)                    # (HYPER's BG: the antialiased edges mixed over it)
