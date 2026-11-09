@@ -1,0 +1,123 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Builds HYPER for the M-VAVE FM-1 on GitHub's Linux machines (JieLi's compiler downloads only there):
+#   1. the firmware: hyper-VERSION.fwsc, kept as a download on the run's page (Artifacts)
+#   2. the host tests (the firmware's own C sources on the PC: sequencer, HYPER tools, the song, the screens)
+#   3. the site on GitHub Pages: the install page for Chrome / Edge (WebMIDI), the editor, the firmware file
+# Run it: Actions -> Build HYPER -> Run workflow (type a version, like 0.1). Pages: Settings -> Pages -> Source:
+# GitHub Actions (once). A push to main builds too.
+name: Build HYPER
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "version (one digit each: 0.1, 0.2, 1.0)"
+        default: "0.1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hyper-build
+  cancel-in-progress: true
+
+jobs:
+  firmware:
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ inputs.version || '0.1' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Lay out (the files may have been uploaded inside a hyper/ folder)
+        run: |
+          if [ -d hyper/firmware ] && [ ! -d firmware ]; then cp -a hyper/. . ; fi
+          chmod +x build.sh tools/*.sh tests/run_tests.sh || true
+
+      - name: Felucca-Engines (the submodule, if the upload left it empty)
+        run: |
+          if [ ! -f firmware/engines/src/felucca_engine.h ]; then
+            rm -rf firmware/engines
+            git clone -q https://github.com/hugelton/Felucca-Engines firmware/engines
+            git -C firmware/engines checkout -q "$(cat .engines-commit 2>/dev/null || echo HEAD)"
+          fi
+          test -f firmware/engines/src/felucca_engine.h
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Python packages
+        run: python3 -m pip install Pillow fonttools
+
+      - name: JieLi Linux toolchain (from JieLi's server)
+        run: |
+          mkdir -p ~/.jieli
+          for i in 1 2 3; do
+            curl -fL --retry 3 https://pkgman.jieliapp.com/s/linux-toolchain | tar -xJ -C ~/.jieli && break
+            sleep 20
+          done
+          TC="$(ls -d ~/.jieli/jieli-linux-toolchains-* | sort | tail -1)"
+          ln -sfn "$(basename "$TC")" ~/.jieli/toolchain
+          echo "JIELI_TOOLCHAIN=$HOME/.jieli/toolchain" >> "$GITHUB_ENV"
+
+      - name: JieLi AC79 SDK (three files the package needs)
+        run: |
+          for i in 1 2 3; do
+            git clone -q --depth 1 --branch AC79NN_SDK_V1.2.1_2023-12-13 \
+                https://gitee.com/Jieli-Tech/fw-AC79_AIoT_SDK.git ~/fw-AC79_AIoT_SDK && break
+            rm -rf ~/fw-AC79_AIoT_SDK
+            sleep 20
+          done
+          test -d ~/fw-AC79_AIoT_SDK
+          echo "AC79_SDK=$HOME/fw-AC79_AIoT_SDK" >> "$GITHUB_ENV"
+
+      - name: Build the firmware
+        run: ./build.sh --release "$VERSION"
+
+      - name: Keep the firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: HYPER-${{ env.VERSION }}-firmware
+          path: build/release-${{ env.VERSION }}/
+          if-no-files-found: error
+
+      - name: Host tests (HYPER's and the base's; the result is in the log, the build goes on)
+        continue-on-error: true
+        run: HOST_ONLY=1 sh tests/run_tests.sh 2>&1 | tee build/host-tests.log
+
+      - name: Keep the test log and the song
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HYPER-${{ env.VERSION }}-tests
+          path: |
+            build/host-tests.log
+            build/hyper_song/
+          if-no-files-found: ignore
+
+      - name: The site
+        run: |
+          python3 web/make_site.py "build/release-$VERSION/hyper-$VERSION.fwsc" "$VERSION" site
+          cp docs/INSTALL.md site/INSTALL.md
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  pages:
+    needs: firmware
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

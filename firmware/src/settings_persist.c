@@ -1,0 +1,86 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
+/* Shared PER4 layout: each feature updates only its own fields, preserving
+ * the other feature's saved preferences when either is built independently.
+ * PER1/PER2 are upstream; PER3 added bold; PER4 added favorites. (Dah) The favourites are gone: their bits (factory[0..13]
+ * but [13][30..31], user, filter) are kept as saved, unread, the layout as it was; the struct holds the bytes below.
+ * palette: UI_PAL_TAG + index; an old id (below 20, earlier firmware) is migrated on import.
+ * bold: no longer used (one font weight); kept as it was saved, unless it holds the HOLD setting (panel.c).
+ * zoom: no longer used (the large readout); kept as it was saved, unless it holds the LEDS setting (panel.c).
+ * favorites.factory[15][28..31]: CLICK / CLICK LEVEL / COUNT-IN (1.1), STYLE, MENU's flags, the layers seen (bytes no
+ * engine uses; 0 in older settings = every one's default); [15][27]: SCREEN OFF (1.1.5; 0 = 30 MIN, the default);
+ * [15][26]: MENU > DISPLAY > HOME (1.3; 0 = SCOPE, 1 TRACKS, 2 LEVELS (1.5), ui.c ui_home_view);
+ * [15][24]: MENU's 1.2 flags SCOPE MIX, STEP PREVIEW ON, CHORD ENTRY ADD (bits 0-2, ui.c ui_prefs2; 0 = the defaults),
+ *   1.5 HELP ON (bit 3), 1.5.5 SELECT PAGE (bit 4; 0 = BPM, as before), 1.5.5 SCREEN WAKE PANEL (bit 5; 0 = +MIDI);
+ *   1.6.1 2ND CORE ON (bit 7; 0 = OFF, one core; Dah: set once, favorites.c DAH_MIG bit 3, so ON is the default);
+ * [15][10]: MENU > ANIM IDLE (1.2, Discussion #135, ui.c ui_idle: bit 0; 0 = off, ANIM as its bit in MENU's flags says;
+ *   Dah: bit 1 MENU > DISPLAY > PREVIEW OFF, 0 = ON);
+ * [15][11]: PRESETS > LIST's category (1.2, Discussion #90; Dah: the page gone, kept as saved, unread);
+ * [15][0..9], [12] (1.6, #244: CUSTOM, a palette of the user's: five RGB565 colours little endian, flags: ui.c ui_cpal); older
+ * firmware keeps the bytes as saved and shows the built-in palette in persist_t.palette.
+ * [15][14..23]: the FX layer's key map (1.2, ui_layer.c fx_keys: 16 white keys x 5 bits, perform.c perf_map_of; 0 = the
+ * key's default, an unknown code too: kept as saved, a later firmware's effect survives a round trip here).
+ * MENU's flags (ui.c PREF_*) are append-only bits whose 0 is the default: BPM LOCK (16) is clear in every older setting
+ * = unlocked, LARGE (32) = OFF, RESTORE LAST OFF (128, 1.2) = ON, read as saved (nothing to migrate, so importing twice changes nothing). */
+typedef struct {
+    uint32_t magic, palette, lowcut, zoom;
+    panel_t panel;
+    uint32_t bold;
+    struct { uint8_t factory[16][32]; uint32_t user, filter; } favorites;
+} persist_t;
+#define PERSIST_MAGIC 0x50455234u
+
+/* Normalize in place; 1 = current, 2 = migrated, 0 = invalid. */
+static int settings_import(persist_t *p, int n)
+{
+    int current = n == (int)sizeof *p && p->magic == PERSIST_MAGIC;   /* (FM Stud1o: PER4 only; PER1..PER3 were upstream's) */
+    if (!current) return 0;
+    if (p->favorites.factory[15][29] > 1u)        /* STYLE (ui.c ui_style): 2, the retired PIXEL = LINE; unknown = FLAT */
+        p->favorites.factory[15][29] = p->favorites.factory[15][29] == 2u ? 1u : 0u;
+    {   /* CLICK, CLICK LEVEL, COUNT-IN (ui.c ui_rec_prefs): two bits each, 3 is no value: the default (0) */
+        uint32_t b = p->favorites.factory[15][28], f;
+        for (f = 0; f < 3u; f++)
+            if (((b >> (2u * f)) & 3u) == 3u)
+                b &= ~(3u << (2u * f));
+        p->favorites.factory[15][28] = (uint8_t)b;
+    }
+    if (p->favorites.factory[15][27] > 7u)         /* SCREEN OFF (1.1.5, ui.c SCR_CODE): unknown = 0 (NEVER since 1.1.5.1) */
+        p->favorites.factory[15][27] = 0;
+    /* [15][26] HOME (1.3, ui.c ui_home_view): kept as saved; a value this firmware does not know draws SCOPE */
+    {   /* CUSTOM (1.6, #244, favorites.c ui_cpal): [15][0..9] five RGB565 colours, [12] bit 0 stored, bit 1 in use. Anything else
+         * in [12], or colours without the stored flag: none (zero). The colours themselves are whatever the user chose */
+        uint8_t *f = p->favorites.factory[15];
+        f[12] &= 3u;
+        if (!(f[12] & 1u)) {
+            memset(f, 0, 10);
+            f[12] = 0;
+        }
+    }
+    p->magic = PERSIST_MAGIC;
+    p->palette = palette_to_stored(palette_from_stored(p->palette));
+    settings.magic = SETTINGS_MAGIC;
+    settings.palette = palette_from_stored(p->palette);
+    settings.lowcut = p->lowcut;
+    settings.zoom = p->zoom;
+    settings_hold = (uint8_t)hold_from_stored(p->bold);
+    settings_leds = (uint8_t)leds_from_stored(p->zoom);
+#ifdef FELUCCA_FAVORITES
+    memcpy(&favorites, &p->favorites, sizeof favorites);
+#endif
+    if (p->panel.magic == PANEL_MAGIC) panel = p->panel;
+    return 1;
+}
+
+/* Start with the last imported/saved object, including fields owned by a
+ * feature absent from this build. No save-on-boot or extra flash writes. */
+static void settings_export(persist_t *p)
+{
+    p->magic = PERSIST_MAGIC;
+    p->palette = palette_to_stored(settings.palette);
+    p->lowcut = settings.lowcut;
+    p->zoom = settings.zoom = leds_to_stored(settings.zoom, settings_leds);
+    p->panel = panel;
+    p->bold = hold_to_stored(p->bold, settings_hold);
+#ifdef FELUCCA_FAVORITES
+    memcpy(&p->favorites, &favorites, sizeof favorites);
+#endif
+}
