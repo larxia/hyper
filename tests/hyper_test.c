@@ -430,8 +430,44 @@ static void test_more(void)
     }
 }
 
+/* ------------------------------------------------ swing on odd lengths --- */
+static void test_swing_len(void)
+{
+    track_t *t = &trk[0];
+    uint32_t len, i, ok = 1, even = 1, per = 5512u;
+    memset(trk, 0, sizeof trk);
+    host_tracks_init();
+    song.g[G_SWING] = 0;
+    t->p[P_SSWING] = 50;
+    for (len = 1; len <= 64u; len++) {
+        uint64_t sum = 0;
+        t->p[P_SLEN] = (int16_t)len;
+        for (i = 0; i < len; i++)
+            sum += step_samples(t, per, i);
+        ok &= sum == (uint64_t)len * per;               /* the loop exactly LEN steps, swing or not */
+        if (!(len & 1u))
+            for (i = 0; i < len; i++)                   /* (even: the swing as ever, long short long short) */
+                even &= step_samples(t, per, i) == swing_step_len(t, per, i);
+    }
+    check("SWING: every LEN's loop is exactly LEN steps (an odd LEN's last step straight)", ok);
+    check("SWING: even LENs swing exactly as before", even && step_samples(t, per, 0) > per && step_samples(t, per, 1) < per);
+    {   /* in time: a LEN 15 track and a LEN 16 one, swung, their loops' starts after 15 x 16 steps line up */
+        track_t *a = &trk[0], *b = &trk[1];
+        uint64_t ta = 0, tb = 0;
+        a->p[P_SLEN] = 15;
+        b->p[P_SLEN] = 16;
+        b->p[P_SSWING] = 50;
+        for (i = 0; i < 240u; i++) {
+            ta += step_samples(a, per, i % 15u);
+            tb += step_samples(b, per, i % 16u);
+        }
+        check("SWING: a LEN 15 and a LEN 16 track meet again after 240 steps (no drift)", ta == tb && ta == 240ull * per);
+    }
+}
+
 int main(void)
 {
+    test_swing_len();
     test_more();
     test_steps();
     test_chords();

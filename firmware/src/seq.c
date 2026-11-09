@@ -453,6 +453,10 @@ static void arp_tick(track_t *t, uint32_t n) { arp_step(t, n, n); }
  * and the odd ones shorter, so every odd step starts late */
 static uint32_t step_samples(const track_t *t, uint32_t period, uint32_t idx)
 {
+    if ((t->p[P_SLEN] & 1) && idx + 1u >= (uint32_t)t->p[P_SLEN])
+        return period;                       /* HYPER: an odd LEN's last step straight (swing pairs the steps by number:
+                                              * its last step and step 1 were both long, the loop longer than LEN steps,
+                                              * a stumble at each restart and a drift from the other tracks) */
     return swing_step_len(t, period, idx);   /* core.h: own + global, at most 100 */
 }
 
